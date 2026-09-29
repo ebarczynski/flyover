@@ -92,9 +92,9 @@ function drawGeom(g, path) {
   else for (const poly of g.coordinates) path(poly[0]);
 }
 
-// ---------- tile layer (OpenStreetMap data, no-label basemap so it stays a game) ----------
-// Swap to 'https://tile.openstreetmap.org/${z}/${x}/${y}.png' for labeled standard OSM.
-const TILE_URL = (z, x, y) => `https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/${z}/${x}/${y}.png`;
+// ---------- tile layer (Esri World Physical Map — keyless, NO labels, terrain + crisp coastlines) ----------
+// Scheme is z/y/x (not OSM's z/x/y). Covers z0-z8; game needs z2-z7.
+const TILE_URL = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Physical_Map/MapServer/tile/${z}/${y}/${x}`;
 const tileCache = new Map();
 let pending = 0;
 
@@ -182,7 +182,7 @@ function render() {
   ctx.textAlign = 'right';
   ctx.fillStyle = 'rgba(255,255,255,.85)';
   ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 2.5;
-  const attr = '© OpenStreetMap contributors © CARTO';
+  const attr = 'Terrain: Esri World Physical Map · Geometries: © OpenStreetMap contributors';
   ctx.strokeText(attr, W - 8, H - 8);
   ctx.fillText(attr, W - 8, H - 8);
   ctx.textAlign = 'left';

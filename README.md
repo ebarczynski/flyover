@@ -34,7 +34,7 @@ Inspired by [FlightQ's Flyover](https://flightq.app/flyover) — rebuilt from sc
 |---|---|
 | Stack | Vanilla HTML/CSS/JS, single page, zero dependencies |
 | Geometry | Natural Earth country polygons (178 countries), Douglas-Peucker simplified to ~120 KB — used as offline fallback layer |
-| Basemap | **OpenStreetMap raster tiles** (CARTO no-labels style) — full detail: coastline, rivers, terrain, roads, urban areas. Labels stripped so it stays a game |
+| Basemap | **Esri World Physical Map** tiles — keyless, label-free, with hillshaded terrain, rivers, and crisp coastlines (CARTO's free tiles went API-key-gated; Esri's physical layer needs no key) |
 | Daily pick | `hash(UTC day) % pool` — same worldwide, no backend |
 | Pool | 138 playable countries (real landmasses only — no micro-island lotteries) |
 | Renderer | Canvas 2D, Web Mercator, 256 px tiles with caching + view culling |
