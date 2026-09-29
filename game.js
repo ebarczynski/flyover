@@ -60,13 +60,27 @@ const project = (lon, lat) => [(lon + 180) * (W / 360), (90 - lat) * (H / 180)];
 
 const target = NAME2META[TARGET_NAME];
 let targetName = TARGET_NAME;
-let view = { lon: target.lon, lat: target.lat, span: 4 };  // span = degrees of longitude visible
-const MAX_SPAN = 360, ZOOM_FACTOR = 3;
+let view = { lon: target.lon, lat: target.lat };
 
-// altitude flavor: km of ground visible across the window (at equator: span° × 111 km)
+// zoom ladder: degrees of longitude visible per view (much wider start than v1)
+const SPANS = [12, 36, 100, 220, 320, 360];
+
+function currentSpan() {
+  const misses = state.guesses.filter(g => !g.correct).length;
+  return SPANS[Math.min(misses, SPANS.length - 1)];
+}
+
+// altitude flavor: km of ground across the window (equator: span° × 111 km)
 function altitudeLabel() {
-  const km = Math.round(view.span * 111);
-  return km >= 9999 ? 'LEO · whole planet' : `ALT ${km.toLocaleString()} km`;
+  const km = Math.round(currentSpan() * 111);
+  return km >= 36000 ? 'LEO · whole planet' : `ALT ${km.toLocaleString()} km`;
+}
+
+// Web Mercator helpers (OSM tile space)
+function lon2x(lon, ws) { return (lon + 180) / 360 * ws; }
+function lat2y(lat, ws) {
+  const s = Math.max(-0.9999, Math.min(0.9999, Math.sin(lat * Math.PI / 180)));
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * ws;
 }
 
 // ---------- canvas ----------
@@ -78,85 +92,100 @@ function drawGeom(g, path) {
   else for (const poly of g.coordinates) path(poly[0]);
 }
 
-function render() {
-  const scale = W / view.span;
-  const [px, py] = project(view.lon, view.lat);
-  const ox = W / 2 - px * scale, oy = H / 2 - py * scale;
-  const S = p => [ox + p[0] * scale, oy + p[1] * scale];  // projected point -> screen
+// ---------- tile layer (OpenStreetMap data, no-label basemap so it stays a game) ----------
+// Swap to 'https://tile.openstreetmap.org/${z}/${x}/${y}.png' for labeled standard OSM.
+const TILE_URL = (z, x, y) => `https://a.basemaps.cartocdn.com/rastertiles/voyager_nolabels/${z}/${x}/${y}.png`;
+const tileCache = new Map();
+let pending = 0;
 
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#0e2a47';
-  ctx.fillRect(0, 0, W, H);
-
-  // view culling: which slice of the map is visible (in projected px)
-  const vx0 = (0 - ox) / scale, vx1 = (W - ox) / scale;
-  const vy0 = (0 - oy) / scale, vy1 = (H - oy) / scale;
-  const visible = c => {
-    // cheap bbox test on first ring
-    const rings = c.g.type === 'Polygon' ? [c.g.coordinates[0]] : c.g.coordinates.map(p => p[0]);
-    for (const r of rings) {
-      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
-      for (const p of r) {
-        const x = (p[0] + 180) * (W / 360), y = (90 - p[1]) * (H / 180);
-        if (x < x0) x0 = x; if (x > x1) x1 = x;
-        if (y < y0) y0 = y; if (y > y1) y1 = y;
-      }
-      if (x1 >= vx0 && x0 <= vx1 && y1 >= vy0 && y0 <= vy1) return true;
-    }
-    return false;
-  };
-
-  // land
-  ctx.beginPath();
-  for (const c of DATA) {
-    if (!visible(c)) continue;
-    drawGeom(c.g, ring => {
-      let [sx, sy] = S(project(ring[0][0], ring[0][1]));
-      ctx.moveTo(sx, sy);
-      for (let i = 1; i < ring.length; i++) {
-        [sx, sy] = S(project(ring[i][0], ring[i][1]));
-        ctx.lineTo(sx, sy);
-      }
-      ctx.closePath();
-    });
+function getTile(z, x, y) {
+  const key = `${z}/${x}/${y}`;
+  let t = tileCache.get(key);
+  if (!t) {
+    const img = new Image();
+    pending++;
+    img.onload = () => { pending--; requestAnimationFrame(render); };
+    img.onerror = () => { pending--; };
+    img.src = TILE_URL(z, ((x % (2 ** z)) + 2 ** z) % (2 ** z), y);
+    t = img;
+    tileCache.set(key, t);
   }
-  ctx.fillStyle = '#ece7d4';
+  return t;
+}
+
+function drawVectorLand(ws, ox, oy) {  // fallback if tiles are blocked (offline)
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#aad3df';
+  ctx.fillRect(0, 0, W, H);
+  ctx.beginPath();
+  for (const c of DATA) drawGeom(c.g, ring => {
+    const [sx, sy] = [ox + lon2x(ring[0][0], ws), oy + lat2y(ring[0][1], ws)];
+    ctx.moveTo(sx, sy);
+    for (let i = 1; i < ring.length; i++)
+      ctx.lineTo(ox + lon2x(ring[i][0], ws), oy + lat2y(ring[i][1], ws));
+    ctx.closePath();
+  });
+  ctx.fillStyle = '#f2efe9';
   ctx.fill();
   ctx.strokeStyle = 'rgba(120,130,145,.9)';
   ctx.lineWidth = 1.1;
   ctx.stroke();
+}
 
-  // graticule (subtle)
-  ctx.beginPath();
-  for (let lon = -180; lon <= 180; lon += 30) { const [a, b] = S(project(lon, 85)), [c2, d] = S(project(lon, -85)); ctx.moveTo(a, b); ctx.lineTo(c2, d); }
-  for (let lat = -60; lat <= 80; lat += 30) { const [a, b] = S(project(-180, lat)), [c2, d] = S(project(180, lat)); ctx.moveTo(a, b); ctx.lineTo(c2, d); }
-  ctx.strokeStyle = 'rgba(255,255,255,.05)';
-  ctx.stroke();
+function render() {
+  const span = currentSpan();
+  // pick tile zoom so the span fills the canvas
+  const idealWorldPx = W * 360 / span;
+  const z = Math.max(2, Math.min(18, Math.round(Math.log2(idealWorldPx / 256))));
+  const ws = 256 * 2 ** z;
+  const ox = W / 2 - lon2x(view.lon, ws);
+  const oy = H / 2 - lat2y(view.lat, ws);
 
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  drawVectorLand(ws, ox, oy);
+
+  // OSM tiles
+  const x0 = Math.floor((0 - ox) / 256), x1 = Math.floor((W - ox) / 256);
+  const y0 = Math.max(0, Math.floor((0 - oy) / 256)), y1 = Math.min(2 ** z - 1, Math.floor((H - oy) / 256));
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+  for (let tx = x0; tx <= x1; tx++) {
+    for (let ty = y0; ty <= y1; ty++) {
+      const img = getTile(z, tx, ty);
+      if (img.complete && img.naturalWidth) ctx.drawImage(img, ox + tx * 256, oy + ty * 256);
+    }
+  }
+  ctx.restore();
 
   // center ring marking the decisive point
-  const [rx, ry] = S(project(target.lon, target.lat));
-  const sx = rx, sy = ry;
-  ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7);
-  ctx.strokeStyle = '#e63946'; ctx.lineWidth = 2.5; ctx.stroke();
-  ctx.beginPath(); ctx.arc(sx, sy, 2.5, 0, 7);
+  const sx = ox + lon2x(target.lon, ws), sy = oy + lat2y(target.lat, ws);
+  ctx.beginPath(); ctx.arc(sx, sy, 10, 0, 7);
+  ctx.strokeStyle = '#e63946'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.beginPath(); ctx.arc(sx, sy, 3, 0, 7);
   ctx.fillStyle = '#e63946'; ctx.fill();
 
   // guess arrows
   for (const g of state.guesses) {
     if (g.correct) continue;
     const m = NAME2META[g.name];
-    const [gx0, gy0] = project(m.lon, m.lat);
-    const ax = ox + gx0 * scale, ay = oy + gy0 * scale;
+    const ax = ox + lon2x(m.lon, ws), ay = oy + lat2y(m.lat, ws);
     if (ax < -40 || ax > W + 40 || ay < -40 || ay > H + 40) continue;
     const ang = Math.atan2(sy - ay, sx - ax);
     ctx.save();
     ctx.translate(ax, ay); ctx.rotate(ang);
-    ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-6, -8); ctx.lineTo(-2, 0); ctx.lineTo(-6, 8); ctx.closePath();
-    ctx.fillStyle = '#ffb703'; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(-7, -9); ctx.lineTo(-2, 0); ctx.lineTo(-7, 9); ctx.closePath();
+    ctx.fillStyle = '#ff8800'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.fill(); ctx.stroke();
     ctx.restore();
   }
+
+  // attribution (required for OSM data)
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,.85)';
+  ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = 2.5;
+  const attr = '© OpenStreetMap contributors © CARTO';
+  ctx.strokeText(attr, W - 8, H - 8);
+  ctx.fillText(attr, W - 8, H - 8);
+  ctx.textAlign = 'left';
 }
 
 // ---------- game state ----------
@@ -227,10 +256,6 @@ function submit(raw) {
 
   if (correct) { state.done = true; state.won = true; }
   else if (state.guesses.length >= MAX_TRIES) { state.done = true; }
-  else {
-    view.span = Math.min(MAX_SPAN, view.span * ZOOM_FACTOR);
-    // recentre on target but keep aspect: latitude span limited by H
-  }
   save(); syncUI(); render();
   if (state.done) showEnd();
 }
@@ -304,7 +329,7 @@ function startFree() {
   const nm = pool[Math.floor(Math.random() * pool.length)];
   targetName = nm;
   Object.assign(target, NAME2META[nm]);   // keep same object reference used by render/bearing
-  view = { lon: target.lon, lat: target.lat, span: 4 };
+  view = { lon: target.lon, lat: target.lat };
   state.guesses = []; state.done = false; state.won = false;
   document.getElementById('mode').textContent = 'FREE PLAY';
   syncUI(); render();
