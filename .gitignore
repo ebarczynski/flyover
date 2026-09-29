@@ -1,0 +1,8 @@
+*.zip
+world.geo.json
+countries_min.json
+countries_simp.json
+countries_final.json
+meta_final.json
+js_data.js
+__pycache__/
