@@ -63,7 +63,7 @@ let targetName = TARGET_NAME;
 let view = { lon: target.lon, lat: target.lat };
 
 // zoom ladder: degrees of longitude visible per view (much wider start than v1)
-const SPANS = [12, 36, 100, 220, 320, 360];
+const SPANS = [8, 20, 48, 110, 220, 360];
 
 function currentSpan() {
   const misses = state.guesses.filter(g => !g.correct).length;
@@ -73,7 +73,7 @@ function currentSpan() {
 // altitude flavor: km of ground across the window (equator: span° × 111 km)
 function altitudeLabel() {
   const km = Math.round(currentSpan() * 111);
-  return km >= 36000 ? 'LEO · whole planet' : `ALT ${km.toLocaleString()} km`;
+  return km >= 30000 ? 'LEO · whole planet' : `ALT ${km.toLocaleString()} km`;
 }
 
 // Web Mercator helpers (OSM tile space)
@@ -190,10 +190,13 @@ function render() {
 
 // ---------- game state ----------
 const MAX_TRIES = 6;
-const state = load() || { day: DAY, guesses: [], done: false, won: false };
-if (state.day !== DAY) { // new day -> reset
-  state.day = DAY; state.guesses = []; state.done = false; state.won = false;
+const state = load() || { day: DAY, round: 1, guesses: [], done: false, won: false, roundsWon: 0, roundsPlayed: 0 };
+if (state.day !== DAY) { // new day -> back to round 1
+  state.day = DAY; state.round = 1; state.guesses = []; state.done = false; state.won = false;
+  state.roundsWon = 0; state.roundsPlayed = 0;
 }
+let freeMode = false;  // becomes true after the first daily round
+
 function load() {
   try { return JSON.parse(localStorage.getItem('flyover-state')); } catch { return null; }
 }
@@ -216,24 +219,29 @@ let suggestions = [], sel = -1;
 function updateSuggest() {
   const q = normalize(input.value);
   suggestions = [];
-  if (q.length >= 2) {
+  if (q.length >= 1) {
+    const starts = [], contains = [];
     for (const m of META) {
       const n = m.n.toLowerCase();
-      if (n.startsWith(q) || n.includes(q) ||
-          (ALIASES[m.n] || []).some(a => a.toLowerCase().startsWith(q))) suggestions.push(m.n);
-      if (suggestions.length >= 7) break;
+      const aliasHit = (ALIASES[m.n] || []).some(a => a.toLowerCase().startsWith(q));
+      if (n.startsWith(q) || aliasHit) starts.push(m.n);
+      else if (n.includes(q)) contains.push(m.n);
     }
+    suggestions = starts.concat(contains).slice(0, 8);
   }
   sel = -1;
   list.innerHTML = suggestions.map(s => `<div class="sug" data-n="${s}">${s}</div>`).join('');
+  list.classList.toggle('open', suggestions.length > 0);
 }
+input.addEventListener('blur', () => setTimeout(() => list.classList.remove('open'), 150));
 input.addEventListener('input', updateSuggest);
 input.addEventListener('keydown', e => {
   if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, suggestions.length - 1); paintSel(); e.preventDefault(); }
   else if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); paintSel(); e.preventDefault(); }
   else if (e.key === 'Enter') { submit(sel >= 0 ? suggestions[sel] : input.value); }
 });
-list.addEventListener('mousedown', e => {
+list.addEventListener('mousedown', e => e.preventDefault());   // keep input focus
+list.addEventListener('pointerdown', e => {
   const t = e.target.closest('.sug'); if (t) submit(t.dataset.n);
 });
 function paintSel() {
@@ -256,8 +264,30 @@ function submit(raw) {
 
   if (correct) { state.done = true; state.won = true; }
   else if (state.guesses.length >= MAX_TRIES) { state.done = true; }
+  if (state.done) { state.roundsPlayed++; if (state.won) state.roundsWon++; }
   save(); syncUI(); render();
   if (state.done) showEnd();
+}
+
+function nextRound() {
+  document.getElementById('end').classList.remove('show');
+  if (!freeMode) {
+    freeMode = true;
+    document.getElementById('mode').textContent = 'FREE PLAY';
+  }
+  pickRandomTarget();
+  state.round++;
+  state.guesses = []; state.done = false; state.won = false;
+  input.disabled = false; document.getElementById('submit').disabled = false;
+  save(); syncUI(); render();
+  input.focus();
+}
+
+function pickRandomTarget() {
+  const pool = DAILY_POOL.filter(n => n !== targetName);
+  targetName = pool[Math.floor(Math.random() * pool.length)];
+  Object.assign(target, NAME2META[targetName]);
+  view = { lon: target.lon, lat: target.lat };
 }
 
 function flash(msg) {
@@ -270,6 +300,7 @@ function flash(msg) {
 function syncUI() {
   document.getElementById('trycount').textContent = `${state.guesses.length}/${MAX_TRIES}`;
   document.getElementById('alt').textContent = altitudeLabel();
+  document.getElementById('roundNo').textContent = `round ${state.round}`;
   const rows = [];
   state.guesses.forEach((g, i) => {
     const m = NAME2META[g.name];
@@ -303,6 +334,8 @@ function showEnd() {
     ? `Solved in ${state.guesses.length} of ${MAX_TRIES} views.` : `Better luck on tomorrow's flight.`;
   end.classList.add('show');
   document.getElementById('share').textContent = buildShare();
+  document.getElementById('playagain').textContent = freeMode ? 'Next country →' : 'Play another country →';
+  document.getElementById('score').textContent = `Session: ${state.roundsWon} won / ${state.roundsPlayed} played`;
 }
 
 function buildShare() {
@@ -315,27 +348,27 @@ function buildShare() {
 document.getElementById('copyshare').addEventListener('click', () => {
   navigator.clipboard.writeText(buildShare()).then(() => flash('Result copied — paste it in the group chat!'));
 });
-document.getElementById('playagain').addEventListener('click', () => {
-  // free-play: random country, doesn't touch daily state
-  startFree();
-});
+document.getElementById('playagain').addEventListener('click', nextRound);
+document.getElementById('resetbtn').addEventListener('click', resetAll);
 
-// ---------- free play mode ----------
-let freeMode = false;
-function startFree() {
-  freeMode = true;
-  document.getElementById('end').classList.remove('show');
-  const pool = DAILY_POOL.filter(n => n !== targetName);
-  const nm = pool[Math.floor(Math.random() * pool.length)];
-  targetName = nm;
-  Object.assign(target, NAME2META[nm]);   // keep same object reference used by render/bearing
+function resetAll() {
+  if (!confirm('Start from scratch? Clears daily progress and session score.')) return;
+  freeMode = false;
+  targetName = TARGET_NAME;
+  Object.assign(target, NAME2META[TARGET_NAME]);
   view = { lon: target.lon, lat: target.lat };
-  state.guesses = []; state.done = false; state.won = false;
-  document.getElementById('mode').textContent = 'FREE PLAY';
-  syncUI(); render();
+  state.round = 1; state.guesses = []; state.done = false; state.won = false;
+  state.roundsWon = 0; state.roundsPlayed = 0;
+  document.getElementById('mode').textContent = 'DAILY';
+  document.getElementById('end').classList.remove('show');
+  input.disabled = false; document.getElementById('submit').disabled = false;
+  save(); syncUI(); render();
+  input.focus();
 }
 
 // ---------- boot ----------
 document.getElementById('mode').textContent = 'DAILY';
 document.getElementById('dayNo').textContent = `#${DAY}`;
+document.getElementById('roundNo').textContent = `round ${state.round}`;
 syncUI(); render();
+if (state.done) showEnd();   // restore end modal for a round finished in a previous session

@@ -11,7 +11,7 @@ Inspired by [FlightQ's Flyover](https://flightq.app/flyover) — rebuilt from sc
 2. You see an **unlabeled map patch** — coastlines, rivers, borders only. The red ring marks the decisive point.
 3. Type a country and hit **FLY**. Aliases work: `USA`, `UK`, `Burma`, `Czechia`, `Holland`…
 4. Every miss:
-   - the plane **climbs** — each view shows much more ground (12° → 36° → 100° → 220° → 320° → whole planet)
+   - the plane **climbs** — each view shows much more ground (8° → 20° → 48° → 110° → 220° → whole planet)
    - a **compass arrow** appears pointing from your guess toward the target — direction only, never distance
 5. You have **6 views**. Solved faster = better.
 
@@ -38,7 +38,8 @@ Inspired by [FlightQ's Flyover](https://flightq.app/flyover) — rebuilt from sc
 | Daily pick | `hash(UTC day) % pool` — same worldwide, no backend |
 | Pool | 138 playable countries (real landmasses only — no micro-island lotteries) |
 | Renderer | Canvas 2D, Web Mercator, 256 px tiles with caching + view culling |
-| Zoom ladder | 12° → 36° → 100° → 220° → 320° → 360° of longitude per view |
+| Zoom ladder | 8° → 20° → 48° → 110° → 220° → 360° of longitude per view |
+| Rounds | Daily puzzle → auto-chained random rounds with a session score; ↺ Reset returns to the daily |
 
 ## Run
 
